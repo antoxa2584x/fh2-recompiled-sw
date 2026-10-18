@@ -119,7 +119,13 @@ State& S() {
     return s;
 }
 
-Handle Proc() { return envGetOwnProcessHandle(); }
+// hbloader passes the process' own handle. A loader that does not (Eden starts an NRO directly) leaves
+// INVALID_HANDLE, and every map then failed with KernelError_InvalidHandle (0xE401): fall back to the
+// current-process pseudo-handle, which the kernel resolves to the caller.
+Handle Proc() {
+    const Handle own = envGetOwnProcessHandle();
+    return own != INVALID_HANDLE ? own : CUR_PROCESS_HANDLE;
+}
 
 bool Intersect(size_t a, size_t al, size_t b, size_t bl, size_t* lo, size_t* hi) {
     const size_t l = a > b ? a : b;

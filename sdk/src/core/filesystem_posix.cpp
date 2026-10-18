@@ -74,6 +74,9 @@ namespace filesystem {
 // headers, but they are libnx.a symbols. C linkage: the namespace does not matter.
 extern "C" int __system_argc;
 extern "C" char** __system_argv;
+// Where the NRO is expected on the SD ("/switch/<title>/<title>.nro"), written by rexglue_switch_add_nro for the
+// loaders that pass no argv[0] (Eden starts an NRO with argc 0). Weak: a title without it gets an empty path.
+extern "C" __attribute__((weak)) const char* const rex_switch_nro_path;
 #endif
 
 std::filesystem::path GetExecutablePath() {
@@ -122,6 +125,9 @@ std::filesystem::path GetExecutablePath() {
       }
     }
     return std::filesystem::path(path);
+  }
+  if (&rex_switch_nro_path != nullptr && rex_switch_nro_path) {
+    return std::filesystem::path(rex_switch_nro_path);
   }
   return {};
 #else

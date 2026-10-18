@@ -600,7 +600,11 @@ std::vector<std::string> Init(int argc, char** argv) {
   }
 
   try {
-    app.parse(argc, argv);
+    // CLI11 reserves argc - 1 entries: with argc 0 (an NRO started by Eden passes no argv[0]) that is SIZE_MAX
+    // and throws std::length_error, which nothing catches before main.
+    if (argc > 0 && argv) {
+      app.parse(argc, argv);
+    }
   } catch (const CLI::ParseError& e) {
     // TODO(tomc): dumb workaround for the stupid chicken and its egg.
     //             dont call rex logging funcs here for now.

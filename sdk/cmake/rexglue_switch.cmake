@@ -136,6 +136,13 @@ function(rexglue_switch_add_nro target_name)
     find_program(REXGLUE_NACPTOOL nacptool HINTS "${DEVKITPRO}/tools/bin" NO_DEFAULT_PATH REQUIRED)
     find_program(REXGLUE_ELF2NRO elf2nro HINTS "${DEVKITPRO}/tools/bin" NO_DEFAULT_PATH REQUIRED)
 
+    # The NRO's place on the SD, for loaders that pass no argv[0] (filesystem_posix.cpp, GetExecutablePath).
+    # C++, since the title's project may enable CXX only.
+    set(_nro_path_source "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_nro_path.cpp")
+    file(WRITE "${_nro_path_source}"
+        "extern \"C\" const char* const rex_switch_nro_path = \"/switch/${target_name}/${target_name}.nro\";\n")
+    target_sources(${target_name} PRIVATE "${_nro_path_source}")
+
     set(_dir "$<TARGET_FILE_DIR:${target_name}>")
     add_custom_command(TARGET ${target_name} POST_BUILD
         COMMAND "${REXGLUE_NACPTOOL}" --create "${ARG_NAME}" "${ARG_AUTHOR}" "${ARG_VERSION}"
