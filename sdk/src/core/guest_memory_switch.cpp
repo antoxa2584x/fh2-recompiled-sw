@@ -484,8 +484,18 @@ bool RexGmCommit(size_t offset, size_t length, RexGmAccess access) {
     std::lock_guard<std::mutex> lock(s.mutex);
     if (!s.base) return false;
 
-    const size_t begin = AlignDown(offset, kPageSize);
-    const size_t end   = AlignUp(offset + length, kPageSize);
+    /*
+     * Committed in 64 KB units, not page by page. Each chunk costs the kernel memory blocks of its
+     * own (the code alias, and its backing splits the heap's block in up to three), and those run
+     * out long before memory does: Forza Horizon 2 commits its 4 KB virtual heap one page per call,
+     * and on the console every commit failed with 2001-0103 (0xCE01, out of resource) at 421 MB of
+     * backing, which the game does not survive (it writes through the null it gets). 64 KB is the
+     * 360's large page; the physical memory fault path already commits 4 MB at a time.
+     */
+    constexpr size_t kCommitGranule = 0x10000;
+    const size_t begin = AlignDown(offset, kCommitGranule);
+    size_t end         = AlignUp(offset + length, kCommitGranule);
+    if (end > s.size) end = AlignUp(offset + length, kPageSize);
 
     size_t cur = begin;
     while (cur < end) {
