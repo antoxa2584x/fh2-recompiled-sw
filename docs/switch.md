@@ -58,6 +58,22 @@ sdmc:/switch/fh2/fh2.toml            optional: settings (cvars)
   RAM), and an 8 GB file does not fit on a FAT32 card anyway.
 - Logs are written to `sdmc:/switch/fh2/logs`; a crash leaves `sdmc:/switch/rex_crash.log`.
 
+## Clocks
+
+By default the NRO runs the CPU, GPU and memory at the docked rates (1785 / 768 / 1600 MHz) in **both** modes
+(`app/src/fh2_switch_relojes.cpp`, ported from the FlatOut 2 port's `FO2_DOCK_BOOST`): more heat and battery in
+handheld. A thread puts them back after the system resets them (dock/undock, HOME, sleep), and the old clocks
+come back on exit. In `fh2.toml`:
+
+```toml
+fh2_switch_boost = false               # the system's clocks
+fh2_switch_boost_docked_only = true    # boost while docked only
+fh2_switch_cpu_mhz = 1785              # other rates (also _gpu_mhz, _mem_mhz; 0 = boost or system)
+fh2_switch_clock_force = true          # even when sys-clk / Horizon OC is running
+```
+
+With sys-clk or Horizon OC running nothing is touched unless forced: their profile decides.
+
 ## Status
 
 - Builds: `fh2.nro` is about 110 MB (107 MB of code with `-O2`), with the game, both DLL modules and the native

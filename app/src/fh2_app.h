@@ -17,6 +17,10 @@
 #include "fh2_teste_entrada.h"
 #include "nfsmw_nativo_sistema.h"
 
+#if REX_PLATFORM_SWITCH
+#include "fh2_switch_relojes.h"
+#endif
+
 #if REX_PLATFORM_ANDROID
 // android/app/src/main/cpp/android_rendimiento.cpp: keeps the game threads off the slow cores.
 extern "C" void fh2_android_nucleos_grandes_aplicar();
@@ -64,6 +68,9 @@ class Fh2App : public rex::ReXApp {
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
   void OnPostSetup() override {
+#if REX_PLATFORM_SWITCH
+    fh2::relojes::Iniciar();  // fh2_switch_relojes.cpp: the docked clocks in both modes unless fh2_switch_boost is off
+#endif
     Fh2PerfilStart();  // fh2_perfil.cpp, off unless fh2_perfil_s is set
 #if REX_PLATFORM_ANDROID
     fh2_android_afinidade_iniciar();  // android_rendimiento.cpp, off unless fh2_android_afinidade is set
@@ -79,7 +86,12 @@ class Fh2App : public rex::ReXApp {
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
-  void OnShutdown() override { fh2::captura::Parar(); }
+  void OnShutdown() override {
+    fh2::captura::Parar();
+#if REX_PLATFORM_SWITCH
+    fh2::relojes::Parar();
+#endif
+  }
 #if REX_PLATFORM_SWITCH
   // The homebrew menu starts the NRO without arguments: the game is the game_root folder next to it
   // (sdmc:/switch/fh2/game_root), unless --game_data_root says otherwise. This runs before fh2.toml is read, so

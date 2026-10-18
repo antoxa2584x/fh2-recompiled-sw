@@ -73,6 +73,8 @@ endif()
 # the extracted game_root/ folder (and fh2_shaders.nfsp for the native renderer) beside it. Launched with title
 # takeover: in applet mode the process gets about 400 MB (sdk/src/ui/runtime_switch.cpp).
 if(REXGLUE_PLATFORM_SWITCH)
+    # CPU, GPU and memory clocks (fh2_switch_boost, on by default: the docked rates in both modes).
+    target_sources(fh2 PRIVATE src/fh2_switch_relojes.cpp)
     # -O3 bloats the translated code, and the Cortex-A57 has 48 KB of instruction cache (nfsmw-nx measured smaller,
     # faster code with -O2). It comes after CMAKE_CXX_FLAGS_RELEASE's -O3, so it wins.
     option(FH2_SWITCH_RECOMP_O2 "Compile the translated game code with -O2 instead of -O3 (Switch)" ON)
