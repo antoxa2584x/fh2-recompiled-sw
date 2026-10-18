@@ -435,6 +435,20 @@ size_t RexGmMappedBytes(void) {
     return s.mapped;
 }
 
+size_t RexGmChunkCount(void) {
+    State& s = S();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    return s.chunks.size();
+}
+
+void RexGmSystemResource(uint64_t* used, uint64_t* total) {
+    u64 u = 0, t = 0;
+    svcGetInfo(&u, InfoType_SystemResourceSizeUsed, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&t, InfoType_SystemResourceSizeTotal, CUR_PROCESS_HANDLE, 0);
+    *used = u;
+    *total = t;
+}
+
 int RexGmModoProteccion(void) {
     switch (g_solo_lectura) {
         case SoloLectura::kSi: return 1;
@@ -493,8 +507,17 @@ bool RexGmCommit(size_t offset, size_t length, RexGmAccess access) {
      * 360's large page; the physical memory fault path already commits 4 MB at a time.
      */
     constexpr size_t kCommitGranule = 0x10000;
-    const size_t begin = AlignDown(offset, kCommitGranule);
-    size_t end         = AlignUp(offset + length, kCommitGranule);
+    /*
+     * The virtual heaps (mapping offsets below 4 GB) in 1 MB units: with 64 KB the game still ran out at
+     * 527 MB of backing, loading its first track, again in the 4 KB heap (guest 0x2E7E0000). Physical
+     * memory is committed by the fault path in 4 MB chunks and by AllocFixed in 64 KB ones.
+     */
+    constexpr size_t kVirtualGranule = 0x100000;
+    constexpr size_t kVirtualEnd = 0x100000000ull;
+    const size_t granule = offset < kVirtualEnd ? kVirtualGranule : kCommitGranule;
+    const size_t begin = AlignDown(offset, granule);
+    size_t end         = AlignUp(offset + length, granule);
+    if (offset < kVirtualEnd && end > kVirtualEnd) end = AlignUp(offset + length, kCommitGranule);
     if (end > s.size) end = AlignUp(offset + length, kPageSize);
 
     size_t cur = begin;

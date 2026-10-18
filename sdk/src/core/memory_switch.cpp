@@ -163,6 +163,10 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
                  "respaldo {} MB, mapeado {} MB contando espejos.",
                  length, reinterpret_cast<uintptr_t>(base_address), RexGmLastResult(),
                  RexGmCommittedBytes() >> 20, RexGmMappedBytes() >> 20);
+    uint64_t sistema_usado = 0, sistema_total = 0;
+    RexGmSystemResource(&sistema_usado, &sistema_total);
+    REXLOG_ERROR("AllocFixed: {} trozos confirmados; recurso de sistema del proceso {} / {} KB",
+                 RexGmChunkCount(), sistema_usado >> 10, sistema_total >> 10);
     return nullptr;
   }
 

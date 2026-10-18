@@ -168,6 +168,14 @@ size_t RexGmCommittedBytes(void);
 size_t RexGmMappedBytes(void);
 
 /*
+ * Committed chunks, and the kernel memory the process has for its own page tables and memory blocks
+ * (svcGetInfo SystemResource{Used,Total}Size, 0 when it has no reserved pool). Each chunk takes kernel
+ * memory blocks, and running out of them is what 2001-0103 (0xCE01) means. For diagnostics.
+ */
+size_t RexGmChunkCount(void);
+void RexGmSystemResource(uint64_t* used, uint64_t* total);
+
+/*
  * Tells whether watched pages are protected with permissions (readable) or by
  * unmapping (not readable). It is printed in the profile header to show which
  * of the two paths Horizon took. 0 = not tried yet, 1 = permissions,
