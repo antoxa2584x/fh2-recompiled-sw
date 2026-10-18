@@ -58,6 +58,16 @@ sdmc:/switch/fh2/fh2.toml            optional: settings (cvars)
   RAM), and an 8 GB file does not fit on a FAT32 card anyway.
 - Logs are written to `sdmc:/switch/fh2/logs`; a crash leaves `sdmc:/switch/rex_crash.log`.
 
+## Status
+
+- Builds: `fh2.nro` is about 110 MB (107 MB of code with `-O2`), with the game, both DLL modules and the native
+  renderer linked in.
+- Eden (emulator): the NRO starts, maps the guest memory, mounts `game_root` and the cache partition, then stalls:
+  the game's writes into the guest memory window land on pages Eden does not consider mapped (the window is made
+  of `svcMapProcessCodeMemory` / `svcMapProcessMemory` mirrors, which Eden does not emulate faithfully), and with
+  `cpuopt_ignore_memory_aborts` on they are silently dropped. Not a useful test bed for this port.
+- Console: not tested yet.
+
 ## Differences from the other platforms
 
 - The DLL modules are linked into the executable and found by name (`RegisterStaticLibrary`,
