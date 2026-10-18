@@ -51,6 +51,14 @@ class Fh2App : public rex::ReXApp {
     if (nfsmw::nativo::Activo()) {
       config.graphics = nfsmw::nativo::CrearSistemaGrafico();
     }
+#if REX_PLATFORM_SWITCH
+    // The Android launcher and the PC scripts pass --gpu_plugin=xenos; the homebrew menu passes nothing, and
+    // without a plugin the game's GPU commands go nowhere and it waits forever at 0 fps. The emulation is the
+    // default here too (fh2.toml can choose the native renderer, or another plugin).
+    if (!config.graphics && config.gpu_plugin.empty()) {
+      config.gpu_plugin = "xenos";
+    }
+#endif
     fh2::teste::EnvolverEntrada(config);
   }
   // void OnLoadXexImage(std::string& xex_image) override {}
