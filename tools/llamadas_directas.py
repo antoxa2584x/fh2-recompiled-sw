@@ -6,7 +6,7 @@
 # and not with LTO. This step changes `sub_X(ctx, base);` into `__imp__sub_X(ctx, base);` when sub_X has no
 # hook, which is exactly the same function, but can now be inlined.
 #
-# Any 82xxxxxx address that appears in the app or SDK sources or in the toml files counts as hooked (the
+# Any 82xxxxxx or 83xxxxxx address that appears in the app or SDK sources or in the toml files counts as hooked (the
 # D3D trace builds its hooks with sub_##addr). That is slightly more than needed and safe; it is also
 # checked against the sub_ symbols the compiled objects really define (--comprobar-objetos).
 #
@@ -43,7 +43,9 @@ def enganchadas():
                 texto = open(ruta, encoding='utf-8', errors='ignore').read()
             except OSError:
                 continue
-            for m in re.findall(r'(?<![0-9A-Fa-f])(82[0-9A-Fa-f]{6})(?![0-9A-Fa-f])', texto):
+            # 82xxxxxx and 83xxxxxx: Forza Horizon 2's code runs up to 0x832F2428 (NFSMW's ends below 0x83000000),
+            # and a hook there (sub_83201D50, fh2_correcoes.cpp) was bypassed when only 82 counted.
+            for m in re.findall(r'(?<![0-9A-Fa-f])(8[23][0-9A-Fa-f]{6})(?![0-9A-Fa-f])', texto):
                 nombres.add('sub_' + m.upper())
     return nombres
 
