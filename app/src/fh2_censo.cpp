@@ -18,8 +18,12 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include <rex/platform.h>
+
+#if !REX_PLATFORM_SWITCH
 #include <sys/uio.h>
 #include <unistd.h>
+#endif
 
 REXCVAR_DEFINE_BOOL(fh2_censo, false, "FH2",
                     "Debug: count calls into the game's D3D library and log them every 150 frames");
@@ -671,11 +675,18 @@ CensoEntry g_entries[kEntries] = {
 // Reads a big-endian guest word without faulting on unmapped memory (an argument is not always a pointer).
 bool ReadGuest(uint8_t* base, uint32_t address, uint32_t& value) {
   if (address < 0x10000 || address >= 0xFFFF0000u) return false;
+#if REX_PLATFORM_SWITCH
+  // No process_vm_readv on Horizon: arguments are not followed there.
+  (void)base;
+  (void)value;
+  return false;
+#else
   uint32_t raw;
   iovec local{&raw, 4}, remote{base + address, 4};
   if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != 4) return false;
   value = __builtin_bswap32(raw);
   return true;
+#endif
 }
 
 // Debug (fh2_censo_cadeia): the call chains (return addresses up the PPC back chain) into the draw entries,

@@ -138,6 +138,13 @@ Known issues:
    key if `~/.android-keys/fh2-recompiled/keystore.properties` (or the file named by `FH2_KEYSTORE_PROPERTIES`)
    exists, with `storeFile`, `storePassword`, `keyAlias` and `keyPassword`; otherwise with the debug key.
 
+5. **Build the Nintendo Switch homebrew** (experimental; after step 3): devkitPro and the Mesa Horizon SDK
+   (static NVK) are needed, see [docs/switch.md](docs/switch.md).
+
+   ```sh
+   FH2_SWITCH_NVK_SDK=/path/to/mesa-horizon-sdk ./build_switch.sh
+   ```
+
 ## Running on Android
 
 1. Download the APK from [Releases](../../releases) and install it, or install your own build with

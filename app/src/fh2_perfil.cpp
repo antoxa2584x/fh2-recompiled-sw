@@ -8,6 +8,10 @@
 // fh2_perfil_duracao_s seconds it writes fh2_perfil.txt next to the log: one line per address, "count library
 // offset", most frequent first. Symbolize with tools/perfil_simbolos.py (addr2line).
 
+#include <rex/platform.h>
+
+// Switch: no signals, POSIX timers, /proc or dynamic loader; Fh2PerfilStart does nothing there (at the end).
+#if !REX_PLATFORM_SWITCH
 #include <dlfcn.h>
 #include <signal.h>
 #include <unwind.h>
@@ -15,6 +19,7 @@
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -40,6 +45,16 @@ REXCVAR_DEFINE_DOUBLE(fh2_perfil_duracao_s, 10.0, "FH2", "Debug: how long the sa
 REXCVAR_DEFINE_STRING(fh2_perfil_thread, "GPU Commands", "FH2",
                       "Debug: the sampled thread, by the start of its name")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+#if REX_PLATFORM_SWITCH
+
+void Fh2PerfilStart() {
+  if (REXCVAR_GET(fh2_perfil_s) > 0.0) {
+    REXLOG_WARN("[perfil] the sampling profiler is not available on Switch");
+  }
+}
+
+#else
 
 namespace {
 
@@ -279,3 +294,5 @@ void Fh2PerfilStart() {
     std::thread(Run).detach();
   }
 }
+
+#endif  // REX_PLATFORM_SWITCH

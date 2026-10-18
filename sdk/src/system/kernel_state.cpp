@@ -20,6 +20,7 @@
 #include <rex/image_info.h>
 #include <rex/logging.h>
 #include <rex/math.h>
+#include <rex/platform.h>
 #include <rex/ppc/function.h>
 #include <rex/runtime.h>
 #include <rex/stream.h>
@@ -350,6 +351,10 @@ void ExportAchievementCatalog(const util::XdbfGameData& db, const std::vector<Ac
     }
     file << json;
   }
+#if REX_PLATFORM_SWITCH
+  // Horizon's SD filesystem does not rename over an existing file.
+  std::filesystem::remove(path, ec);
+#endif
   std::filesystem::rename(temporary, path, ec);
 }
 

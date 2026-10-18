@@ -239,6 +239,19 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
     return false;
   }
+#if REX_PLATFORM_SWITCH
+  // DiscImageDevice reads the image through MappedMemory, which on Switch loads the whole file into RAM and
+  // refuses anything over 256 MB (core/mapped_memory_switch.cpp): a disc image cannot work there.
+  if (!std::filesystem::is_directory(paths.game_data_root)) {
+    auto msg = fmt::format(
+        "Disc images are not supported on Switch: extract the game into a game_root folder next to the NRO "
+        "(tools/fase1_extraer.py) instead of {}",
+        paths.game_data_root.string());
+    REXLOG_ERROR("{}", msg);
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+    return false;
+  }
+#endif
 
   game_data_root_ = paths.game_data_root;
   user_data_root_ = paths.user_data_root;

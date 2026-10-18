@@ -11,6 +11,7 @@ add_library(rexcore OBJECT
     exception_handler.cpp
     filesystem.cpp
     filesystem_wildcard.cpp
+    futex.cpp
     hash.cpp
     logging.cpp
     memory.cpp

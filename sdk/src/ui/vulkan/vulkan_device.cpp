@@ -453,7 +453,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
         // present waits there for the previous frame's fence, and on the only queue that wait held the queue lock
         // the command processor submits through. Adapted from NFSMW-Recompiled-Mobile
         // (tools/parche_cola_presentar.py), where the command processor spent 81 % of its time on that lock.
+        // Android only: elsewhere (Switch's NVK in particular) presenting from a second queue is untested.
+#if REX_PLATFORM_ANDROID
         const size_t present_queues = queue_family_properties.queueCount >= 2 ? 2 : 1;
+#else
+        const size_t present_queues = 1;
+#endif
         queue_family.queues.resize(std::max(present_queues, queue_family.queues.size()));
         has_presentation_queue_family = true;
       }

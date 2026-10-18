@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <filesystem>
+#include <system_error>
+
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/rex_app.h>
 
 #include <rex/ui/presenter.h>
@@ -68,5 +72,19 @@ class Fh2App : public rex::ReXApp {
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
   void OnShutdown() override { fh2::captura::Parar(); }
-  // void OnConfigurePaths(rex::PathConfig& paths) override {}
+#if REX_PLATFORM_SWITCH
+  // The homebrew menu starts the NRO without arguments: the game is the game_root folder next to it
+  // (sdmc:/switch/fh2/game_root), unless --game_data_root says otherwise. This runs before fh2.toml is read, so
+  // the toml cannot set it.
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    if (!paths.game_data_root.empty()) {
+      return;
+    }
+    std::error_code ec;
+    const auto game_root = rex::filesystem::GetExecutableFolder() / "game_root";
+    if (std::filesystem::is_directory(game_root, ec)) {
+      paths.game_data_root = game_root;
+    }
+  }
+#endif
 };

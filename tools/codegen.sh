@@ -33,6 +33,8 @@ if [ -n "${2:-}" ]; then
 else
   "$PY" tools/llamadas_directas.py --gen "$APP/generated/default"
 fi
+echo "== module names"
+"$PY" tools/nomes_modulos.py "$APP/generated"
 echo "== literal copies"
 if [ ! -f "$RAIZ/tools/copia_literal.py" ]; then
   echo "[aviso] sin tools/copia_literal.py; omitiendo copias literales."

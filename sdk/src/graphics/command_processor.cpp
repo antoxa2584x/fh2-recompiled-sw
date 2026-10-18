@@ -23,12 +23,6 @@
 #include <fmt/format.h>
 #include <rex/hash.h>
 
-#if defined(__linux__)
-#include <linux/futex.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
-
 #include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/perf/counter.h>
@@ -38,6 +32,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
 #include <rex/graphics/pipeline/texture/info.h>
+#include <rex/thread/futex.h>
 #include <rex/graphics/sampler_info.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
@@ -124,11 +119,9 @@ namespace {
 // only when someone sleeps.
 void PublishReadPointer() {
   rex_cp_rptr_seq.fetch_add(1, std::memory_order_seq_cst);
-#if defined(__linux__)
   if (rex_cp_rptr_waiters.load(std::memory_order_seq_cst)) {
-    syscall(SYS_futex, &rex_cp_rptr_seq, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+    rex::thread::FutexWakeAll(rex_cp_rptr_seq);
   }
-#endif
 }
 }  // namespace
 
@@ -147,20 +140,11 @@ std::atomic<uint32_t> vblank_seq{0};
 std::atomic<uint32_t> swap_seq{0};
 
 void FutexWake(std::atomic<uint32_t>& word) {
-#if defined(__linux__)
-  syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
-#endif
+  rex::thread::FutexWakeAll(word);
 }
 
 void FutexWait(std::atomic<uint32_t>& word, uint32_t expected, int64_t nanoseconds) {
-#if defined(__linux__)
-  timespec limit{time_t(nanoseconds / 1000000000), long(nanoseconds % 1000000000)};
-  syscall(SYS_futex, reinterpret_cast<uint32_t*>(&word), FUTEX_WAIT_PRIVATE, expected, &limit, nullptr, 0);
-#else
-  (void)word;
-  (void)expected;
-  rex::thread::Sleep(std::chrono::nanoseconds(nanoseconds));
-#endif
+  rex::thread::FutexWait(word, expected, nanoseconds);
 }
 }  // namespace
 

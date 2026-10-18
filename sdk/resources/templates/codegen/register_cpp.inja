@@ -27,4 +27,25 @@ extern "C" REX_MODULE_EXPORT
 const rex::PPCImageInfo* ReXModule_GetImageInfo() {
   return &PPCImageConfig;
 }
+
+#ifdef REX_STATIC_MODULE_FILE
+// Built into the executable instead of a shared library (Nintendo Switch, which
+// cannot load one): ReXModule_Register, ReXModule_GetImageInfo and the image
+// globals are renamed per module on the command line (dll_targets.cmake), and the
+// module is registered under its library's file name, where KernelState's
+// DynamicLibrary::Load looks for it.
+#include <rex/platform/dynlib.h>
+
+namespace {
+const rex::platform::StaticLibrarySymbol kReXModuleSymbols[] = {
+    {"ReXModule_Register", reinterpret_cast<void*>(&ReXModule_Register)},
+    {"ReXModule_GetImageInfo", reinterpret_cast<void*>(&ReXModule_GetImageInfo)},
+};
+[[maybe_unused]] const bool kReXModuleRegistered = [] {
+  rex::platform::RegisterStaticLibrary(REX_STATIC_MODULE_FILE, kReXModuleSymbols,
+                                       sizeof(kReXModuleSymbols) / sizeof(kReXModuleSymbols[0]));
+  return true;
+}();
+}  // namespace
+#endif
 {% endif %}

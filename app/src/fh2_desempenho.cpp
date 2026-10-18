@@ -19,22 +19,21 @@
 // for fences the CP writes mid-buffer, and sleeping there would add latency. Cvar fh2_espera_anel turns it off
 // to compare.
 
+#include <rex/platform.h>
+
+#if !REX_PLATFORM_SWITCH
 #include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 
-#if defined(__linux__)
-#include <linux/futex.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
-
 #include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/ppc/func.h>
+#include <rex/thread/futex.h>
 
 REXCVAR_DEFINE_BOOL(fh2_espera_anel, true, "FH2",
                     "Sleep instead of spinning while the game waits for room in the GPU command ring "
@@ -67,6 +66,12 @@ struct ReadPointerSignal {
 extern std::atomic<uint32_t> g_fh2_anillo_seq;
 extern std::atomic<uint32_t> g_fh2_anillo_esperando;
 
+#if REX_PLATFORM_SWITCH
+// The Switch NRO links the GPU plugin statically (cmake/rexglue_switch.cmake): its counters are ordinary symbols.
+extern "C" std::atomic<uint32_t> rex_cp_rptr_seq;
+extern "C" std::atomic<uint32_t> rex_cp_rptr_waiters;
+#endif
+
 namespace {
 
 // The GPU plugin's counters, looked up once it is loaded; or the native renderer's ring, once it has returned a read
@@ -82,6 +87,16 @@ const ReadPointerSignal* Signal() {
       ready.store(true, std::memory_order_release);
       return &signal;
     }
+#if REX_PLATFORM_SWITCH
+    // Linked in, but only the emulated command processor moves it: until it does, the native ring may still be
+    // the one in use.
+    if (rex_cp_rptr_seq.load(std::memory_order_relaxed) == 0) {
+      return nullptr;
+    }
+    signal.sequence = &rex_cp_rptr_seq;
+    signal.waiters = &rex_cp_rptr_waiters;
+    REXLOG_INFO("[fh2] espera do anel: dorme no futex do processador de comandos");
+#else
     // dlopen and dlsym walk the dynamic loader's tables: not on every turn of the game's spin (in native mode the
     // plugin is never loaded, and that lookup alone was a third of the render thread's samples on the PC).
     static uint32_t intentos = 0;
@@ -97,6 +112,7 @@ const ReadPointerSignal* Signal() {
     REXLOG_INFO("[fh2] espera do anel: {}", signal.sequence && signal.waiters
                                                  ? "dorme no futex do processador de comandos"
                                                  : "contador do plugin ausente, gira como no console");
+#endif
     ready.store(true, std::memory_order_release);
   }
   return signal.sequence && signal.waiters ? &signal : nullptr;
@@ -114,7 +130,6 @@ bool IsRingWait(uint32_t return_address) {
 }  // namespace
 
 REX_HOOK_RAW(sub_82B72A90) {
-#if defined(__linux__)
   if (REXCVAR_GET(fh2_espera_anel) && IsRingWait(static_cast<uint32_t>(ctx.lr))) {
     if (const ReadPointerSignal* signal = Signal()) {
       // Sequence first, pointer second: if the CP publishes in between, the sequence has already changed and
@@ -127,13 +142,11 @@ REX_HOOK_RAW(sub_82B72A90) {
       const uint32_t seen = LoadGuestU32(base, state + 8);
       const uint32_t read_pointer = LoadGuestU32(base, LoadGuestU32(base, device + kDeviceReadPointerCopy));
       if (read_pointer == seen) {
-        timespec limit{0, 1000000};  // 1 ms
-        syscall(SYS_futex, signal->sequence, FUTEX_WAIT_PRIVATE, before, &limit, nullptr, 0);
+        rex::thread::FutexWait(*signal->sequence, before, 1000000);  // 1 ms
       }
       signal->waiters->fetch_sub(1, std::memory_order_seq_cst);
     }
   }
-#endif
   __imp__sub_82B72A90(ctx, base);
 }
 

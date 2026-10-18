@@ -25,7 +25,9 @@ GEN = os.path.join(RAIZ, 'app', 'generated', 'default')
 FUENTES = [os.path.join(RAIZ, 'app', 'src'), os.path.join(RAIZ, 'sdk', 'src'),
            os.path.join(RAIZ, 'sdk', 'include'), os.path.join(RAIZ, 'app', 'overrides.toml'),
            os.path.join(RAIZ, 'app', 'huecos.toml'), os.path.join(RAIZ, 'app', 'nfsmw_manifest.toml'),
-           os.path.join(RAIZ, 'app', 'CMakeLists.txt')]
+           os.path.join(RAIZ, 'app', 'fh2_manifest.toml'), os.path.join(RAIZ, 'app', 'CMakeLists.txt')]
+# The translated code: <project>_recomp.N.cpp (nfsmw_recomp.N.cpp, fh2_recomp.N.cpp).
+FICHERO_TRADUCIDO = re.compile(r'^[a-z0-9_]+_recomp\.\d+\.cpp$')
 
 
 def enganchadas():
@@ -58,7 +60,7 @@ def main():
     cambiadas = 0
     ficheros = 0
     for f in sorted(os.listdir(gen)):
-        if not (f.startswith('nfsmw_recomp.') and f.endswith('.cpp')):
+        if not FICHERO_TRADUCIDO.match(f):
             continue
         ruta = os.path.join(gen, f)
         texto = open(ruta, encoding='utf-8').read()

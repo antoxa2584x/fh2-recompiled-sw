@@ -22,7 +22,8 @@
 #include <rex/system/mmio_handler.h>
 #include <rex/types.h>
 
-#if !REX_PLATFORM_WIN32
+// Horizon has no dynamic loader (and no dlfcn.h): the Switch build logs the bare pc.
+#if !REX_PLATFORM_WIN32 && !REX_PLATFORM_SWITCH
 #include <dlfcn.h>
 #endif
 
@@ -431,8 +432,11 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
       // Android, by module offset for addr2line elsewhere), for the first few only.
       static std::atomic<int> reported{0};
       if (reported.fetch_add(1, std::memory_order_relaxed) < 4) {
-        Dl_info info{};
         const uint64_t pc = ex->pc();
+#if REX_PLATFORM_SWITCH
+        REXLOG_ERROR("  at host pc 0x{:X}", pc);
+#else
+        Dl_info info{};
         if (dladdr(reinterpret_cast<void*>(pc), &info) && info.dli_fname) {
           REXLOG_ERROR("  at host pc 0x{:X} = {}+0x{:X} ({}+0x{:X})", pc, info.dli_fname,
                        pc - reinterpret_cast<uint64_t>(info.dli_fbase), info.dli_sname ? info.dli_sname : "?",
@@ -440,6 +444,7 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
         } else {
           REXLOG_ERROR("  at host pc 0x{:X}", pc);
         }
+#endif
       }
 #endif
     }

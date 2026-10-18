@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 
@@ -46,6 +47,17 @@ class DynamicLibrary {
  private:
   void* handle_ = nullptr;
 };
+
+#if REX_PLATFORM_SWITCH
+// Horizon cannot load a library at run time. Code that would have been one (a recompiled XEX module, built into the
+// executable instead) registers its exported symbols under the library's file name from a static constructor, and
+// DynamicLibrary::Load then "loads" it by that name. 'symbols' must outlive the program.
+struct StaticLibrarySymbol {
+  const char* name;
+  void* address;
+};
+void RegisterStaticLibrary(const char* file_name, const StaticLibrarySymbol* symbols, size_t count);
+#endif
 
 namespace lib_names {
 
