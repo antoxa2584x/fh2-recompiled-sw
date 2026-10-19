@@ -3059,8 +3059,47 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         vmax = maximo;
         indices_de_16 = true;
       } else {
+        // Sized but not filled on a cache hit (SinInicializar): the count is all the later code reads from it then.
         indices_.resize(cuenta);
         uint32_t* salida = indices_.data();
+#if defined(FH2_RECOMP)
+        // fh2_nativo_indices_en_cache for the general path (restart index, 32-bit indices or an offset): FH2's usual
+        // case. The result also depends on the restart value and the offset, which do not fit in the cache's key:
+        // they are kept beside the vertex range and checked on every hit. A hit with other values converts as usual and
+        // stores nothing, so an entry is never served with parameters it was not converted with.
+        const uint32_t bytes_crudos_g = cuenta * (indices32 ? 4 : 2);
+        const uint32_t base_fisica_g = base & 0x1FFFFFFF;
+        const uint32_t banderas_g = uint32_t(orden) | (indices32 ? 4u : 0u) | (reinicio ? 8u : 0u);
+        const uint32_t orden_clave_g = 0x200u | banderas_g;
+        const uint64_t clave_g = (uint64_t(base_fisica_g) << 34) | (uint64_t(bytes_crudos_g) << 4) | banderas_g;
+        const uint32_t reinicio_g = reinicio ? indice_reinicio : UINT32_MAX;
+        const bool al_cache_g = fh2_indices_en_cache_ && cache_activo_ && !cuadrilateros && bytes_crudos_g >= 512 &&
+                                cache_vertices_.Admite(base_fisica_g, bytes_crudos_g);
+        const uint64_t huella_g = al_cache_g && cache_comprobar_ ? XXH3_64bits(datos, bytes_crudos_g) : 0;
+        bool acertado = false, otro_uso = false;
+        if (al_cache_g &&
+            cache_vertices_.Buscar(base_fisica_g, bytes_crudos_g, orden_clave_g, offset_indices_cache, huella_g)) {
+          const auto r = fh2_indices_generales_.find(clave_g);
+          if (r != fh2_indices_generales_.end() && r->second.desplazamiento == desplazamiento &&
+              r->second.reinicio == reinicio_g) {
+            vmin = r->second.vmin;
+            vmax = r->second.vmax;
+            acertado = indices_en_cache = true;
+            ++fh2_indices_cache_aciertos_;
+          } else {
+            otro_uso = true;  // the cached entry is for other parameters: neither used nor replaced
+          }
+        }
+        if (!acertado) {
+          uint32_t tick = 0;
+          VkDeviceSize offset_nuevo = 0;
+          const bool guardar = al_cache_g && !otro_uso &&
+                               cache_vertices_.Reservar(cuenta * 4, 4, offset_nuevo, tick);
+          if (guardar) {
+            // Watched before the conversion reads the guest bytes: a write from here on makes the entry stale.
+            memoria_->EnablePhysicalMemoryAccessCallbacks(base_fisica_g, bytes_crudos_g, true, false);
+          }
+#endif
         for (uint32_t i = 0; i < cuenta; ++i) {
           uint32_t v;
           if (indices32) {
@@ -3081,6 +3120,26 @@ class DibujosVulkanImpl final : public DibujosVulkan {
           vmax = std::max(vmax, v);
           salida[i] = v;
         }
+#if defined(FH2_RECOMP)
+          if (guardar && vmin <= vmax) {
+            std::memcpy(cache_datos_ + offset_nuevo, salida, size_t(cuenta) * 4);
+            cache_vertices_.Anotar(base_fisica_g, bytes_crudos_g, orden_clave_g, offset_nuevo, tick, huella_g);
+            cache_escrito_min_ = std::min<VkDeviceSize>(cache_escrito_min_, offset_nuevo);
+            cache_escrito_max_ = std::max<VkDeviceSize>(cache_escrito_max_, offset_nuevo + VkDeviceSize(cuenta) * 4);
+            if (fh2_indices_generales_.size() >= 65536) {
+              fh2_indices_generales_.clear();  // a range missing here only costs a conversion
+            }
+            fh2_indices_generales_[clave_g] = {vmin, vmax, desplazamiento, reinicio_g};
+            offset_indices_cache = offset_nuevo;
+            indices_en_cache = true;
+            ++fh2_indices_cache_copias_;
+          }
+        }
+        if (((fh2_indices_cache_aciertos_ + fh2_indices_cache_copias_) & 0x3FFFF) == 0x3FFFF) {
+          REXLOG_INFO("[fh2 nativo] indices en la cache de vertices: {} aciertos, {} conversiones guardadas",
+                      fh2_indices_cache_aciertos_, fh2_indices_cache_copias_);
+        }
+#endif
       }
       if (vmin > vmax) {
         return Fh2DiagSalida(p, __LINE__, true);  // resets only
@@ -14841,6 +14900,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   uint64_t fh2_indices_cache_aciertos_ = 0, fh2_indices_cache_copias_ = 0;
   // fh2_nativo_indices_en_cache: the vertex range of each cached index range, by (address, bytes, byte order).
   std::unordered_map<uint64_t, std::pair<uint16_t, uint16_t>> fh2_rangos_indices_;
+  // The same for the general path: also the offset and the restart value it was converted with.
+  struct Fh2IndicesGerais {
+    uint32_t vmin, vmax, desplazamiento, reinicio;
+  };
+  std::unordered_map<uint64_t, Fh2IndicesGerais> fh2_indices_generales_;
 #endif
   bool cache_comprobar_ = false;
   VkBuffer cache_bufer_ = VK_NULL_HANDLE;
