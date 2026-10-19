@@ -85,6 +85,15 @@ if(REXGLUE_PLATFORM_SWITCH)
             endif()
         endforeach()
     endif()
+    # The translated code without FPCR writes at its VMX/FPU switches (rex/ppc/context.h): VMX keeps denormals.
+    option(FH2_SWITCH_SEM_TROCA_FLUSH "Switch: no FP flush-mode switches in the translated code" ON)
+    if(FH2_SWITCH_SEM_TROCA_FLUSH)
+        foreach(alvo fh2_recomp ${REXGLUE_DLL_MODULE_TARGETS})
+            if(TARGET ${alvo})
+                target_compile_definitions(${alvo} PRIVATE REX_PPC_NO_FLUSH_MODE_SWITCH=1)
+            endif()
+        endforeach()
+    endif()
     # LTO across the game code and ours (with tools/llamadas_directas.py the compiler can inline small game
     # functions across files). Off by default: the link needs a lot of RAM (16 GB with -flto=2 for NFSMW).
     option(FH2_SWITCH_LTO "LTO on the game code and the app (Switch)" OFF)

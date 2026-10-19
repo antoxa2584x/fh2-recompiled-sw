@@ -178,6 +178,17 @@ struct FPSCRRegister {
     setcsr(csr);
   }
 
+  // REX_PPC_NO_FLUSH_MODE_SWITCH (set on the translated code's targets, e.g. the Switch build): VMX keeps
+  // denormals instead of flushing them, and the switches between the VMX and FPU modes cost nothing. The
+  // translated code emits the Unconditional form at every switch between vector and scalar FP inside a
+  // function, and writing FPCR stalls the pipeline (a Cortex-A57 pays it twice per loop iteration of code
+  // that mixes both, such as a software audio mixer). Only results below ~1e-38 change.
+#if defined(REX_PPC_NO_FLUSH_MODE_SWITCH)
+  inline void enableFlushModeUnconditional() noexcept {}
+  inline void disableFlushModeUnconditional() noexcept {}
+  inline void enableFlushMode() noexcept {}
+  inline void disableFlushMode() noexcept {}
+#else
   inline void enableFlushModeUnconditional() noexcept {
     csr |= FlushMask;
     setcsr(csr);
@@ -201,6 +212,7 @@ struct FPSCRRegister {
       setcsr(csr);
     }
   }
+#endif
 
   inline void InitHost() noexcept {
     csr = getcsr();
