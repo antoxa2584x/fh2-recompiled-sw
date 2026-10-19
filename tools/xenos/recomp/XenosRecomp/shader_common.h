@@ -211,6 +211,9 @@ float4 fh2Entrada(float4 valor, uint ubicacion)
 // FH2: the buffers of the vertex fetch constants that the vertex shaders read without a declaration, copied by the
 // renderer as they are in guest memory (the GPU's byte order is applied here, from the fetch constant).
 [[vk::binding(3, 4)]] ByteAddressBuffer g_Fh2Buscas;
+// fh2_nativo_buscas_en_cache: the ranges the guest has not rewritten stay in the renderer's vertex cache across frames
+// instead of being copied to the upload buffer every frame; the start has bit 31 set for those.
+[[vk::binding(4, 4)]] ByteAddressBuffer g_Fh2BuscasCache;
 
 uint fh2PalabraBusca(uint constante, int palabra)
 {
@@ -219,7 +222,8 @@ uint fh2PalabraBusca(uint constante, int palabra)
                endian = NFSMW_COMPARTIDA_UINT(b + 8);
     if (palabra < 0 || uint(palabra) >= tamano)
         return 0;
-    uint w = g_Fh2Buscas.Load((inicio + uint(palabra)) * 4);
+    uint w = (inicio & 0x80000000u) != 0 ? g_Fh2BuscasCache.Load(((inicio & 0x7FFFFFFFu) + uint(palabra)) * 4)
+                                         : g_Fh2Buscas.Load((inicio + uint(palabra)) * 4);
     if (endian == 1)
         w = ((w & 0x00FF00FFu) << 8) | ((w >> 8) & 0x00FF00FFu);
     else if (endian == 2)

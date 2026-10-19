@@ -223,6 +223,11 @@ REXCVAR_DEFINE_INT32(fh2_nativo_omitir_categorias, 0, "FH2",
 REXCVAR_DEFINE_BOOL(fh2_nativo_cache_vertices, true, "FH2",
                     "Native renderer: vertex cache across frames, kept valid by the write watch")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(fh2_nativo_buscas_en_cache, true, "FH2",
+                    "Native renderer: the direct vertex fetch ranges (g_Fh2Buscas) the guest has not rewritten stay in "
+                    "the vertex cache across frames instead of being copied every frame (93 % of their copies in a "
+                    "Switch race, about 120 MB/s on the ring thread). Needs the shader library with g_Fh2BuscasCache")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(fh2_nativo_cache_vertices_comprobar, false, "FH2",
                     "Native renderer (measurement): fingerprint each vertex cache hit against the guest data and count "
                     "the mismatches (they miss and copy as usual)")
@@ -3866,6 +3871,40 @@ class DibujosVulkanImpl final : public DibujosVulkan {
         // pages (Fh2Vigilado); smaller ones are copied every time.
         const uint8_t* datos_busca = static_cast<const uint8_t*>(memoria_->TranslatePhysical(b.direccion));
         const uint32_t bytes_busca = b.palabras * 4;
+        // fh2_nativo_buscas_en_cache: a range from 4 KB the guest has not rewritten since it was copied stays in the
+        // vertex cache across frames (its write watch makes it stale), instead of a copy to every frame's upload buffer.
+        if (fh2_buscas_en_cache_ && cache_activo_ && bytes_busca >= (4u << 10) && uint32_t(b.orden) == 2 &&
+            cache_vertices_.Admite(b.direccion, bytes_busca)) {
+          const uint64_t huella = cache_comprobar_ ? XXH3_64bits(datos_busca, bytes_busca) : 0;
+          bool en_cache = cache_vertices_.Buscar(b.direccion, bytes_busca, uint32_t(b.orden), offset, huella);
+          if (en_cache) {
+            ++fh2_buscas_cache_aciertos_;
+          } else {
+            uint32_t tick = 0;
+            if (cache_vertices_.Reservar(bytes_busca, 4, offset, tick)) {
+              // Watched before the copy: a guest write from here on makes it stale.
+              memoria_->EnablePhysicalMemoryAccessCallbacks(b.direccion, bytes_busca, true, false);
+              CopiarVertices(TrabajoCopia{datos_busca, cache_datos_ + offset, b.palabras, b.orden});
+              cache_vertices_.Anotar(b.direccion, bytes_busca, uint32_t(b.orden), offset, tick, huella);
+              cache_escrito_min_ = std::min<VkDeviceSize>(cache_escrito_min_, offset);
+              cache_escrito_max_ = std::max<VkDeviceSize>(cache_escrito_max_, offset + bytes_busca);
+              ++fh2_buscas_cache_copias_;
+              fh2_buscas_cache_bytes_ += bytes_busca;
+              en_cache = true;
+            }
+          }
+          if (en_cache) {
+            if (((fh2_buscas_cache_aciertos_ + fh2_buscas_cache_copias_) & 0x3FFFF) == 0) {
+              REXLOG_INFO("[fh2 nativo] buscas en la cache de vertices: {} aciertos, {} copias ({:.0f} MB)",
+                          fh2_buscas_cache_aciertos_, fh2_buscas_cache_copias_,
+                          double(fh2_buscas_cache_bytes_) / 1048576.0);
+            }
+            w[0] = uint32_t(offset / 4) | 0x80000000u;  // in dwords from the start of the cache (binding 4)
+            w[1] = b.palabras;
+            w[2] = 0;  // already in host byte order
+            continue;
+          }
+        }
         Fh2Vigilado* vigilado = nullptr;
         uint32_t motivo = 0;  // why it is copied (bytes per reason in the 10 s report)
         if (fh2_vigilancia_ && bytes_busca >= (4u << 10)) {
@@ -9033,11 +9072,21 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 #else
     const uint64_t ram = 0;
 #endif
+#if REX_PLATFORM_SWITCH
+    // The Switch (4 GB, no sysconf): 128 MB. At 64 it was full about 1,000 times a second in a race, before the direct
+    // vertex fetches (fh2_nativo_buscas_en_cache) moved into it too.
+    (void)ram;
+    cache_vertices_.Configurar(32);
+#else
     cache_vertices_.Configurar(ram >= (uint64_t(7) << 30) ? 48 : 16);
+#endif
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size = cache_vertices_.Tamano();
     info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+#if defined(FH2_RECOMP)
+    info.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;  // g_Fh2BuscasCache (fh2_nativo_buscas_en_cache)
+#endif
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     bool bien = memoria_ != nullptr && dfn_.vkCreateBuffer(device_, &info, nullptr, &cache_bufer_) == VK_SUCCESS;
     if (bien) {
@@ -9068,6 +9117,9 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
     cache_activo_ = true;
     cache_comprobar_ = REXCVAR_GET(fh2_nativo_cache_vertices_comprobar);
+#if defined(FH2_RECOMP)
+    fh2_buscas_en_cache_ = REXCVAR_GET(fh2_nativo_buscas_en_cache);
+#endif
     REXLOG_INFO("[fh2 nativo] cache de vertices: ENCENDIDA, {} MB en el tipo de memoria {} ({}){}",
                 cache_vertices_.Tamano() >> 20, subida_tipo_,
                 subida_coherente_ ? "coherente" : "se publica antes de enviar",
@@ -9401,22 +9453,25 @@ class DibujosVulkanImpl final : public DibujosVulkan {
                 usar_ubo_ ? "SI" : "no", alternar_ubo_s_, alineacion_ubo_);
 #if defined(FH2_RECOMP)
     // FH2: binding 3, the direct vertex fetch buffer (g_Fh2Buscas): the slot's whole upload buffer, not dynamic (the
-    // shared constants carry absolute offsets).
-    constexpr uint32_t kEnlacesSet4 = 4;
+    // shared constants carry absolute offsets). Binding 4 (g_Fh2BuscasCache): the vertex cache's buffer, for the
+    // fetch ranges kept there across frames (fh2_nativo_buscas_en_cache).
+    constexpr uint32_t kEnlacesSet4 = 5;
 #else
     constexpr uint32_t kEnlacesSet4 = 3;
 #endif
-    std::array<VkDescriptorSetLayoutBinding, 4> enlaces_ubo{};
+    std::array<VkDescriptorSetLayoutBinding, 5> enlaces_ubo{};
     for (uint32_t b = 0; b < 3; ++b) {
       enlaces_ubo[b].binding = b;
       enlaces_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
       enlaces_ubo[b].descriptorCount = 1;
       enlaces_ubo[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    enlaces_ubo[3].binding = 3;
-    enlaces_ubo[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    enlaces_ubo[3].descriptorCount = 1;
-    enlaces_ubo[3].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    for (uint32_t b = 3; b < 5; ++b) {
+      enlaces_ubo[b].binding = b;
+      enlaces_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      enlaces_ubo[b].descriptorCount = 1;
+      enlaces_ubo[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo info_ubo{};
     info_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info_ubo.bindingCount = kEnlacesSet4;
@@ -9426,11 +9481,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
     const VkDescriptorPoolSize tamanos_ubo[2] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * uint32_t(sets_ubo_.size())},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, uint32_t(sets_ubo_.size())}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * uint32_t(sets_ubo_.size())}};
     VkDescriptorPoolCreateInfo info_pool_ubo{};
     info_pool_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info_pool_ubo.maxSets = uint32_t(sets_ubo_.size());
-    info_pool_ubo.poolSizeCount = kEnlacesSet4 == 4 ? 2 : 1;
+    info_pool_ubo.poolSizeCount = kEnlacesSet4 > 3 ? 2 : 1;
     info_pool_ubo.pPoolSizes = tamanos_ubo;
     if (dfn_.vkCreateDescriptorPool(device_, &info_pool_ubo, nullptr, &pool_ubo_) != VK_SUCCESS) {
       return false;
@@ -9470,6 +9525,13 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       escritura_buscas.descriptorCount = 1;
       escritura_buscas.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       escritura_buscas.pBufferInfo = &buscas;
+      dfn_.vkUpdateDescriptorSets(device_, 1, &escritura_buscas, 0, nullptr);
+      // Binding 4: the vertex cache's buffer or, with the cache off, the slot's upload buffer, which no fetch then reads
+      // (without the cache no start carries bit 31).
+      const VkDescriptorBufferInfo buscas_cache{cache_activo_ ? cache_bufer_ : subidas_[ranura].bufer, 0,
+                                                VK_WHOLE_SIZE};
+      escritura_buscas.dstBinding = 4;
+      escritura_buscas.pBufferInfo = &buscas_cache;
       dfn_.vkUpdateDescriptorSets(device_, 1, &escritura_buscas, 0, nullptr);
 #endif
     }
@@ -14710,6 +14772,10 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   // fh2_nativo_cache_vertices (CrearCacheVertices). Ring only, except the write watch (CacheVerticesEntreFotogramas).
   CacheVerticesEntreFotogramas cache_vertices_;
   bool cache_activo_ = false;
+#if defined(FH2_RECOMP)
+  bool fh2_buscas_en_cache_ = false;  // fh2_nativo_buscas_en_cache, read once
+  uint64_t fh2_buscas_cache_aciertos_ = 0, fh2_buscas_cache_copias_ = 0, fh2_buscas_cache_bytes_ = 0;
+#endif
   bool cache_comprobar_ = false;
   VkBuffer cache_bufer_ = VK_NULL_HANDLE;
   VkDeviceMemory cache_memoria_ = VK_NULL_HANDLE;
