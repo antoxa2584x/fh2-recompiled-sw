@@ -43,6 +43,26 @@ imported from.
 
    An icon for the homebrew menu can be put in `tools/switch/icon.jpg` (256x256 JPEG); it is not distributed.
 
+### Profile-guided optimization (PGO)
+
+Optional, as nfsmw-nx does it: GCC reorders and inlines the translated game code by how the game really runs.
+
+1. Instrumented build, in a folder of its own (the profile is matched by object path, so both builds must use it):
+
+   ```sh
+   SAIDA=$PWD/app/out/switch-pgo FH2_SWITCH_NVK_SDK=... ./build_switch.sh -DFH2_SWITCH_PGO=generar
+   ```
+
+2. Play it (it is slower: every branch is counted). Every 2 minutes it writes its counters to
+   `sdmc:/switch/fh2/pgo/` and starts over; `despejos.txt` there lists each dump and how long it took. A dump takes
+   over a minute on the SD card (about 340 files), so play at least 8-10 minutes to get several: what is played
+   after the last dump is lost.
+3. Copy `sdmc:/switch/fh2/pgo/*.gcda` to `pgo/switch` (ignored by Git) and build with the profile:
+
+   ```sh
+   SAIDA=$PWD/app/out/switch-pgo FH2_SWITCH_NVK_SDK=... ./build_switch.sh -DFH2_SWITCH_PGO=usar
+   ```
+
 ## Running
 
 ```
