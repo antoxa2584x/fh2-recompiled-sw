@@ -692,6 +692,10 @@ REXCVAR_DEFINE_BOOL(fh2_nativo_cementerio, true, "FH2",
                     "A resolved texture replaced by another shape at the same address is destroyed once the GPU is done "
                     "with it, instead of waiting for the GPU right there (about 4.5 waits per frame in the race: 10 fps "
                     "on the PC without it, the game's 30 with it)");
+REXCVAR_DEFINE_BOOL(fh2_nativo_reciclar, true, "FH2",
+                    "A resolved texture from the graveyard that the GPU is done with is kept for the next one of the same "
+                    "size and format instead of being freed (on the Switch every GPU allocation and free is a kernel "
+                    "call: about 6 per frame in the race); it comes back as a new image would, uninitialized and cleared");
 REXCVAR_DEFINE_BOOL(fh2_nativo_variantes_limpias, true, "FH2",
                     "With fh2_nativo_variantes: a kept texture is cleared when it comes back, as a new image would be");
 REXCVAR_DEFINE_BOOL(fh2_nativo_variantes, false, "FH2",
@@ -992,6 +996,7 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
       Destruir(enterrada.imagen);
     }
     fh2_cementerio_.clear();
+    Fh2SoltarRecicladas();
 #endif
     Destruir(mosaico_);
     for (ImagenFrontal& repuesto : frontales_imagenes_) {  // nfsmw_nativo_frontal_perezoso
@@ -4936,6 +4941,56 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
 
 #if defined(FH2_RECOMP)
   // Destroys the graveyard's images whose last possible submission has finished (no pending slot at or before it).
+  // fh2_nativo_reciclar: a graveyard image the GPU is done with keeps its image, memory and view for the next resolved
+  // texture of the same size and format; everything else goes back to what Crear gives a new image (preparada false:
+  // it is prepared from UNDEFINED and cleared again). The view's framebuffers stay valid: same image, same view.
+  void Fh2Reciclar(Imagen& imagen) {
+    if (imagen.ms_imagen != VK_NULL_HANDLE) {  // fh2_nativo_msaa: not worth keeping its transient image too
+      Destruir(imagen);
+      return;
+    }
+    imagen.fh2_borrar = false;
+    fh2_por_borrar_.erase(std::remove(fh2_por_borrar_.begin(), fh2_por_borrar_.end(), &imagen), fh2_por_borrar_.end());
+    Imagen limpia;
+    limpia.imagen = imagen.imagen;
+    limpia.memoria = imagen.memoria;
+    limpia.vista = imagen.vista;
+    limpia.ancho = imagen.ancho;
+    limpia.alto = imagen.alto;
+    limpia.formato = imagen.formato;
+    imagen = Imagen{};
+    if (fh2_recicladas_.size() >= kFh2MaxRecicladas) {
+      Destruir(fh2_recicladas_.front());
+      fh2_recicladas_.erase(fh2_recicladas_.begin());
+    }
+    fh2_recicladas_.push_back(limpia);
+  }
+
+  // A kept image of that size and format, if there is one. Its usage flags follow from the format, as in
+  // ObtenerResuelta, so the shape is the whole key.
+  bool Fh2TomarReciclada(Imagen& imagen, uint32_t ancho, uint32_t alto, VkFormat formato) {
+    if (!REXCVAR_GET(fh2_nativo_reciclar)) return false;
+    for (auto it = fh2_recicladas_.begin(); it != fh2_recicladas_.end(); ++it) {
+      if (it->ancho == ancho && it->alto == alto && it->formato == formato) {
+        imagen = *it;
+        fh2_recicladas_.erase(it);
+        if ((++fh2_recicladas_usadas_ & 1023) == 0) {
+          REXLOG_INFO("[fh2 nativo] reciclar: {} texturas resueltas reutilizadas sin crear otra, {} en reserva",
+                      fh2_recicladas_usadas_, fh2_recicladas_.size());
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void Fh2SoltarRecicladas() {
+    for (Imagen& imagen : fh2_recicladas_) {
+      Destruir(imagen);
+    }
+    fh2_recicladas_.clear();
+  }
+
   void Fh2VaciarCementerio(bool todo = false) {
     if (fh2_cementerio_.empty()) return;
     uint64_t pendiente_minima = UINT64_MAX;
@@ -4954,7 +5009,11 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
           s = s->first.first == it->imagen.vista || s->first.second == it->imagen.vista ? fh2_escala_sets_.erase(s)
                                                                                       : std::next(s);
         }
-        Destruir(it->imagen);
+        if (!todo && REXCVAR_GET(fh2_nativo_reciclar)) {
+          Fh2Reciclar(it->imagen);
+        } else {
+          Destruir(it->imagen);
+        }
         it = fh2_cementerio_.erase(it);
         ++fh2_enterradas_;
       } else {
@@ -5108,7 +5167,13 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
 #else
     const bool almacenamiento = false;
 #endif
-    if (!Crear(resuelta.imagen, ancho, alto,
+#if defined(FH2_RECOMP)
+    const bool reciclada = Fh2TomarReciclada(resuelta.imagen, ancho, alto, formato_host);
+#else
+    const bool reciclada = false;
+#endif
+    if (!reciclada &&
+        !Crear(resuelta.imagen, ancho, alto,
                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | uso_destino |
                    (almacenamiento ? VK_IMAGE_USAGE_STORAGE_BIT : 0),
@@ -6109,6 +6174,9 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
             imagen.memoria)) {
       // The GPU can run out of memory here too. Render targets are few and large, so one that does not fit
       // shows up at once: the texture cache is asked to release memory and the allocation is retried once.
+#if defined(FH2_RECOMP)
+      Fh2SoltarRecicladas();  // fh2_nativo_reciclar: kept images first
+#endif
       if (!dibujos_ || !dibujos_->SoltarTexturasPorFaltaDeMemoria() ||
           !rex::ui::vulkan::util::CreateDedicatedAllocationImage(
               dispositivo_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, imagen.imagen,
@@ -7560,6 +7628,10 @@ class DestinosVulkan final : public DestinosNativos, public ContextoDestinos {
   };
   std::vector<Fh2Enterrada> fh2_cementerio_;
   uint64_t fh2_enterradas_ = 0;
+  // fh2_nativo_reciclar: graveyard images kept for reuse, oldest first.
+  static constexpr size_t kFh2MaxRecicladas = 32;
+  std::vector<Imagen> fh2_recicladas_;
+  uint64_t fh2_recicladas_usadas_ = 0;
   uint32_t fh2_copias_foto_ = 0;  // copies to fh2_nativo_foto_copia in this frame
 #endif
   Imagen mosaico_;
