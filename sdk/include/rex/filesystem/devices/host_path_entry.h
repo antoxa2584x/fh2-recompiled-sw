@@ -62,6 +62,9 @@ class HostPathEntry : public Entry {
   bool DeleteEntryInternal(Entry* entry) override;
   X_STATUS RenameEntryInternal(const std::vector<std::string_view>& path_parts) override;
 
+  // game_data_overrides: the entry reads another host file from now on, with that file's size.
+  void Redirigir(const std::filesystem::path& host_path, uint64_t size);
+
   std::filesystem::path host_path_;
   bool children_complete_ = false;
 };

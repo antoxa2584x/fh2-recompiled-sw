@@ -30,6 +30,9 @@
 #include <rex/thread.h>
 
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
+REXCVAR_DEFINE_STRING(game_data_overrides, "", "Runtime",
+                      "Folder whose files replace the game's files of the same relative path (an extracted game "
+                      "folder only); empty = none");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
 REXCVAR_DEFINE_STRING(cache_root, "", "Runtime", "Override shader cache path");
@@ -333,6 +336,12 @@ bool Runtime::SetupVfs() {
   if (!device->Initialize()) {
     REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize the game device ({})", abs_game_root.string());
     return false;
+  }
+  if (const std::string substituicoes = REXCVAR_GET(game_data_overrides); !substituicoes.empty()) {
+    if (auto* host = dynamic_cast<rex::filesystem::HostPathDevice*>(device.get())) {
+      const size_t n = host->AplicarSubstituicoes(substituicoes);
+      REXSYS_INFO("Runtime::SetupVfs: {} arquivo(s) do jogo substituido(s) a partir de {}", n, substituicoes);
+    }
   }
   if (!file_system_->RegisterDevice(std::move(device))) {
     REXSYS_ERROR("Runtime::SetupVfs: Failed to register host path device");

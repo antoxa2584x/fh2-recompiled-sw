@@ -86,6 +86,35 @@ bool HostPathDevice::Initialize() {
   return true;
 }
 
+size_t HostPathDevice::AplicarSubstituicoes(const std::filesystem::path& pasta) {
+  std::error_code ec;
+  if (!std::filesystem::is_directory(pasta, ec)) {
+    return 0;
+  }
+  size_t substituidos = 0;
+  for (auto it = std::filesystem::recursive_directory_iterator(pasta, ec);
+       !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+    if (!it->is_regular_file(ec)) {
+      continue;
+    }
+    const auto relativo = std::filesystem::relative(it->path(), pasta, ec);
+    if (ec) {
+      continue;
+    }
+    std::string guest = rex::path_to_utf8(relativo);
+    std::replace(guest.begin(), guest.end(), '/', '\\');
+    auto* entrada = dynamic_cast<HostPathEntry*>(root_entry_->ResolvePath(guest));
+    if (!entrada || (entrada->attributes() & kFileAttributeDirectory)) {
+      REXFS_WARN("[io] substituicao ignorada (o jogo nao tem esse arquivo): {}", guest);
+      continue;
+    }
+    entrada->Redirigir(it->path(), uint64_t(it->file_size(ec)));
+    REXFS_INFO("[io] substituido: {} ({} bytes, de {})", guest, entrada->size(), rex::path_to_utf8(it->path()));
+    ++substituidos;
+  }
+  return substituidos;
+}
+
 void HostPathDevice::Dump(string::StringBuffer* string_buffer) {
   auto global_lock = global_critical_region_.Acquire();
   root_entry_->Dump(string_buffer, 0);

@@ -44,6 +44,10 @@ class HostPathDevice : public Device {
   ~HostPathDevice() override;
 
   bool Initialize() override;
+  // game_data_overrides: every file under `pasta` whose path relative to it names a file of this device
+  // replaces that file's contents (read from `pasta` instead). Files the device does not have are ignored.
+  // Returns how many were replaced.
+  size_t AplicarSubstituicoes(const std::filesystem::path& pasta);
   void Dump(string::StringBuffer* string_buffer) override;
   Entry* ResolvePath(const std::string_view path) override;
 

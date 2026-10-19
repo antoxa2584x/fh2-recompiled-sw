@@ -28,6 +28,12 @@ HostPathEntry::HostPathEntry(Device* device, Entry* parent, const std::string_vi
 
 HostPathEntry::~HostPathEntry() = default;
 
+void HostPathEntry::Redirigir(const std::filesystem::path& host_path, uint64_t size) {
+  host_path_ = host_path;
+  size_ = size;
+  allocation_size_ = rex::round_up(size, device_->bytes_per_sector());
+}
+
 HostPathEntry* HostPathEntry::Create(Device* device, Entry* parent,
                                      const std::filesystem::path& full_path,
                                      rex::filesystem::FileInfo file_info) {

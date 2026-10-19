@@ -97,10 +97,16 @@ class Fh2App : public rex::ReXApp {
   // (sdmc:/switch/fh2/game_root), unless --game_data_root says otherwise. This runs before fh2.toml is read, so
   // the toml cannot set it.
   void OnConfigurePaths(rex::PathConfig& paths) override {
+    std::error_code ec;
+    // Replacement game files (game_data_overrides): sdmc:/switch/fh2/overrides/<path in the game>, for example
+    // media/tracks/Anthem/TrackSettings.xml with lighter detail settings; the game folder stays as extracted.
+    const auto substituicoes = rex::filesystem::GetExecutableFolder() / "overrides";
+    if (rex::cvar::GetFlagByName("game_data_overrides").empty() && std::filesystem::is_directory(substituicoes, ec)) {
+      rex::cvar::SetFlagByName("game_data_overrides", substituicoes.string());
+    }
     if (!paths.game_data_root.empty()) {
       return;
     }
-    std::error_code ec;
     const auto game_root = rex::filesystem::GetExecutableFolder() / "game_root";
     if (std::filesystem::is_directory(game_root, ec)) {
       paths.game_data_root = game_root;
