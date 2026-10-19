@@ -9016,27 +9016,42 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     // The prewarm list is saved even if the cache does not grow (a new pipeline whose shaders were already
     // in it does not make it grow). The cache, as usual: only if it has new entries.
     std::vector<uint8_t> lista;
-    if (lista_sin_guardar_) {
-      lista_sin_guardar_ = 0;
-      lista = SerializarListaPipelines();
-    }
     std::vector<uint8_t> datos;
-    if (pipelines_sin_guardar_) {
-      pipelines_sin_guardar_ = 0;
-      size_t bytes = 0;
-      // without new entries it is not rewritten (the SD card is slow on the Switch)
-      if (cache_pipelines_ != VK_NULL_HANDLE &&
-          datos_cache_(device_, cache_pipelines_, &bytes, nullptr) == VK_SUCCESS && bytes &&
-          bytes != bytes_cache_guardados_) {
-        datos.resize(bytes);
-        const VkResult resultado = datos_cache_(device_, cache_pipelines_, &bytes, datos.data());
-        if ((resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) || !bytes) {
-          datos.clear();
-        } else {
+    // The cache grows with every new pipeline (6 MB at the start of a Switch session, more after minutes of new
+    // places), and one block of that size may not fit in a nearly full heap: a std::bad_alloc here terminated the
+    // game on the console. Saving is never worth that: the save is skipped and retried at the next one.
+    try {
+      if (lista_sin_guardar_) {
+        lista_sin_guardar_ = 0;
+        lista = SerializarListaPipelines();
+      }
+      if (pipelines_sin_guardar_) {
+        pipelines_sin_guardar_ = 0;
+        size_t bytes = 0;
+        // without new entries it is not rewritten (the SD card is slow on the Switch)
+        if (cache_pipelines_ != VK_NULL_HANDLE &&
+            datos_cache_(device_, cache_pipelines_, &bytes, nullptr) == VK_SUCCESS && bytes &&
+            bytes != bytes_cache_guardados_) {
           datos.resize(bytes);
-          bytes_cache_guardados_ = bytes;
+          const VkResult resultado = datos_cache_(device_, cache_pipelines_, &bytes, datos.data());
+          if ((resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) || !bytes) {
+            datos.clear();
+          } else {
+            datos.resize(bytes);
+            bytes_cache_guardados_ = bytes;
+          }
         }
       }
+    } catch (const std::bad_alloc&) {
+      lista = {};
+      datos = {};
+      lista_sin_guardar_ = 1;
+      pipelines_sin_guardar_ = 1;
+      static std::atomic<uint32_t> avisos{0};
+      if (avisos.fetch_add(1, std::memory_order_relaxed) < 4) {
+        REXLOG_WARN("[nativo] C6: sin memoria para guardar la cache de pipelines; se intenta en el siguiente guardado");
+      }
+      return;
     }
     if (datos.empty() && lista.empty()) {
       return;

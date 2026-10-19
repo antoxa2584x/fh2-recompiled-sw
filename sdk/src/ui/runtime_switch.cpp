@@ -89,12 +89,17 @@ u32 __nx_applet_type = AppletType_Application;
  * measure what it seemed to. It stays at 1,024 because that is enough, not
  * because it fixed anything.
  *
- * 1,024 MB leave plenty of room for what lives in the heap (the guest backing,
- * measured at 506 MB, the host thread stacks at 16 MB each, and whatever Mesa
- * asks for) and leave the rest free for the mappings. What the GPU uses
- * (textures, buffers and compiled shaders) does not come from here.
+ * 1,024 MB left plenty of room for NFSMW (the guest backing, measured at 506 MB,
+ * the host thread stacks at 16 MB each, and whatever Mesa asks for) and the rest
+ * free for the mappings. What the GPU uses (textures, buffers and compiled
+ * shaders) does not come from here.
+ *
+ * Forza Horizon 2 ran out of it: after six minutes of free roam (570 MB of guest
+ * backing, Mesa's CPU-side pipelines for every new place), a 6+ MB block for the
+ * pipeline cache save failed with std::bad_alloc. 1,536 MB is what this ran with
+ * before, without trouble with the mappings.
  */
-size_t __nx_heap_size = 1024ull * 1024 * 1024;  /* see below */
+size_t __nx_heap_size = 1536ull * 1024 * 1024;  /* see below */
 
 /*
  * The exception handler stack is no longer declared here.
