@@ -228,6 +228,11 @@ REXCVAR_DEFINE_BOOL(fh2_nativo_buscas_en_cache, true, "FH2",
                     "the vertex cache across frames instead of being copied every frame (93 % of their copies in a "
                     "Switch race, about 120 MB/s on the ring thread). Needs the shader library with g_Fh2BuscasCache")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(fh2_nativo_indices_en_cache, true, "FH2",
+                    "Native renderer: 16-bit index buffers (the fast path: no restart, offset or quads) converted once "
+                    "and kept in the vertex cache across frames under its write watch, with their vertex range, "
+                    "instead of being converted and uploaded on every draw (3.3 us per draw on the Switch)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(fh2_nativo_cache_vertices_comprobar, false, "FH2",
                     "Native renderer (measurement): fingerprint each vertex cache hit against the guest data and count "
                     "the mismatches (they miss and copy as usual)")
@@ -2972,6 +2977,8 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     uint32_t vmax = 0;
     bool con_indices = false;
     bool indices_de_16 = false;  // in indices16_ instead of indices_
+    bool indices_en_cache = false;  // fh2_nativo_indices_en_cache: in the cache's buffer at offset_indices_cache
+    VkDeviceSize offset_indices_cache = 0;
     indices_.clear();
     if (fuente == uint32_t(xenos::SourceSelect::kDMA)) {
       const uint32_t tamano = r[gr::XE_GPU_REG_VGT_DMA_SIZE];
@@ -2995,12 +3002,59 @@ class DibujosVulkanImpl final : public DibujosVulkan {
           (orden == xenos::Endian::k8in16 || orden == xenos::Endian::kNone)) {
         // The normal case in NFSMW: 16 bits without restart or offset. They are uploaded as 16 bits, with a
         // branch-free loop the compiler can vectorize.
+        // Sized but not filled on a cache hit (SinInicializar): the count is all the later code reads from it then.
         indices16_.resize(cuenta);
         uint16_t* salida = indices16_.data();
         uint32_t minimo = 0xFFFF;
         uint32_t maximo = 0;
+#if defined(FH2_RECOMP)
+        // fh2_nativo_indices_en_cache: the cache's entries are keyed by guest range and byte order; bit 8 marks the
+        // converted 16-bit indices, so a range never matches a vertex copy of the same bytes.
+        const uint32_t bytes_crudos = cuenta * 2;
+        const uint32_t base_fisica = base & 0x1FFFFFFF;
+        const uint32_t orden_clave = 0x100u | uint32_t(orden);
+        const uint64_t clave_rango = (uint64_t(base_fisica) << 32) | (uint64_t(bytes_crudos) << 8) | uint32_t(orden);
+        const bool al_cache = fh2_indices_en_cache_ && cache_activo_ && bytes_crudos >= 512 &&
+                              cache_vertices_.Admite(base_fisica, bytes_crudos);
+        const uint64_t huella = al_cache && cache_comprobar_ ? XXH3_64bits(datos, bytes_crudos) : 0;
+        if (al_cache && cache_vertices_.Buscar(base_fisica, bytes_crudos, orden_clave, offset_indices_cache, huella)) {
+          if (const auto r = fh2_rangos_indices_.find(clave_rango); r != fh2_rangos_indices_.end()) {
+            minimo = r->second.first;
+            maximo = r->second.second;
+            indices_en_cache = true;
+            ++fh2_indices_cache_aciertos_;
+          }
+        }
+        if (!indices_en_cache) {
+          uint32_t tick = 0;
+          const bool guardar = al_cache && cache_vertices_.Reservar(bytes_crudos, 4, offset_indices_cache, tick);
+          if (guardar) {
+            // Watched before the conversion reads the guest bytes: a write from here on makes the entry stale.
+            memoria_->EnablePhysicalMemoryAccessCallbacks(base_fisica, bytes_crudos, true, false);
+          }
+          // With hand-written NEON and its guard (IndicesDe16, nfsmw_nativo_indices_neon).
+          IndicesDe16(datos, cuenta, salida, orden == xenos::Endian::k8in16, minimo, maximo);
+          if (guardar) {
+            std::memcpy(cache_datos_ + offset_indices_cache, salida, bytes_crudos);
+            cache_vertices_.Anotar(base_fisica, bytes_crudos, orden_clave, offset_indices_cache, tick, huella);
+            cache_escrito_min_ = std::min<VkDeviceSize>(cache_escrito_min_, offset_indices_cache);
+            cache_escrito_max_ = std::max<VkDeviceSize>(cache_escrito_max_, offset_indices_cache + bytes_crudos);
+            if (fh2_rangos_indices_.size() >= 65536) {
+              fh2_rangos_indices_.clear();  // only costs conversions: a range missing here is a miss
+            }
+            fh2_rangos_indices_[clave_rango] = {uint16_t(minimo), uint16_t(maximo)};
+            indices_en_cache = true;
+            ++fh2_indices_cache_copias_;
+          }
+        }
+        if (((fh2_indices_cache_aciertos_ + fh2_indices_cache_copias_) & 0x3FFFF) == 0x3FFFF) {
+          REXLOG_INFO("[fh2 nativo] indices en la cache de vertices: {} aciertos, {} conversiones guardadas",
+                      fh2_indices_cache_aciertos_, fh2_indices_cache_copias_);
+        }
+#else
         // With hand-written NEON and its guard (IndicesDe16, nfsmw_nativo_indices_neon).
         IndicesDe16(datos, cuenta, salida, orden == xenos::Endian::k8in16, minimo, maximo);
+#endif
         vmin = minimo;
         vmax = maximo;
         indices_de_16 = true;
@@ -4031,7 +4085,9 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     }
 #endif
     VkDeviceSize offset_indices = 0;
-    if (con_indices) {
+    if (con_indices && indices_en_cache) {
+      offset_indices = offset_indices_cache;  // fh2_nativo_indices_en_cache: already in the cache's buffer
+    } else if (con_indices) {
       cat_subida_ = 2;
       Reservar(bytes_indices, 4, offset_indices);
       bytes_indices_subidos_ += bytes_indices;
@@ -4609,7 +4665,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
       // point to the same data.
       CieloAplazado& c = cielo_;
       c.pipeline = pipeline;
-      c.bufer = subida_;
+      c.bufer = indices_en_cache ? cache_bufer_ : subida_;
       c.usa_ubo = usar_ubo_;
       c.push[0] = subida_direccion_ + constantes_vs_offset_;
       c.push[1] = subida_direccion_ + constantes_ps_offset_;
@@ -4752,6 +4808,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (!grabado) {
       stencil_grabado_valido_ = false;
       tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+      bufer_indices_grabado_ = VK_NULL_HANDLE;
     }
     if (claves[4]) {
       const uint32_t frente = stencil_frente;  // computed before the recording block
@@ -4921,9 +4978,11 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     if (con_indices) {
       // The upload buffer is bound once per index type and each draw uses firstIndex.
       const VkIndexType tipo_indices = indices_de_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-      if (tipo_indices != tipo_indices_grabado_) {
-        NFSMW_SUB(9, dfn_.vkCmdBindIndexBuffer(cmd, subida_, 0, tipo_indices));
+      const VkBuffer bufer_indices = indices_en_cache ? cache_bufer_ : subida_;  // fh2_nativo_indices_en_cache
+      if (tipo_indices != tipo_indices_grabado_ || bufer_indices != bufer_indices_grabado_) {
+        NFSMW_SUB(9, dfn_.vkCmdBindIndexBuffer(cmd, bufer_indices, 0, tipo_indices));
         tipo_indices_grabado_ = tipo_indices;
+        bufer_indices_grabado_ = bufer_indices;
       }
       // On the base-zero path, vertexOffset also carries where the copy starts (in vertices).
       const int32_t desplazamiento_vertices =
@@ -5035,6 +5094,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     enlaces_grabados_ = 0;
     stencil_grabado_valido_ = false;
     tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+    bufer_indices_grabado_ = VK_NULL_HANDLE;
   }
 
   // Adds the time since the mark to the stage and moves the mark to now.
@@ -9086,6 +9146,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 #if defined(FH2_RECOMP)
     info.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;  // g_Fh2BuscasCache (fh2_nativo_buscas_en_cache)
+    info.usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;    // fh2_nativo_indices_en_cache
 #endif
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     bool bien = memoria_ != nullptr && dfn_.vkCreateBuffer(device_, &info, nullptr, &cache_bufer_) == VK_SUCCESS;
@@ -9119,6 +9180,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
     cache_comprobar_ = REXCVAR_GET(fh2_nativo_cache_vertices_comprobar);
 #if defined(FH2_RECOMP)
     fh2_buscas_en_cache_ = REXCVAR_GET(fh2_nativo_buscas_en_cache);
+    fh2_indices_en_cache_ = REXCVAR_GET(fh2_nativo_indices_en_cache);
 #endif
     REXLOG_INFO("[fh2 nativo] cache de vertices: ENCENDIDA, {} MB en el tipo de memoria {} ({}){}",
                 cache_vertices_.Tamano() >> 20, subida_tipo_,
@@ -14775,6 +14837,10 @@ class DibujosVulkanImpl final : public DibujosVulkan {
 #if defined(FH2_RECOMP)
   bool fh2_buscas_en_cache_ = false;  // fh2_nativo_buscas_en_cache, read once
   uint64_t fh2_buscas_cache_aciertos_ = 0, fh2_buscas_cache_copias_ = 0, fh2_buscas_cache_bytes_ = 0;
+  bool fh2_indices_en_cache_ = false;  // fh2_nativo_indices_en_cache, read once
+  uint64_t fh2_indices_cache_aciertos_ = 0, fh2_indices_cache_copias_ = 0;
+  // fh2_nativo_indices_en_cache: the vertex range of each cached index range, by (address, bytes, byte order).
+  std::unordered_map<uint64_t, std::pair<uint16_t, uint16_t>> fh2_rangos_indices_;
 #endif
   bool cache_comprobar_ = false;
   VkBuffer cache_bufer_ = VK_NULL_HANDLE;
@@ -14804,6 +14870,7 @@ class DibujosVulkanImpl final : public DibujosVulkan {
   uint32_t stencil_grabado_[2] = {};  // RB_STENCILREFMASK for front and back
   bool stencil_grabado_valido_ = false;
   VkIndexType tipo_indices_grabado_ = VK_INDEX_TYPE_MAX_ENUM;
+  VkBuffer bufer_indices_grabado_ = VK_NULL_HANDLE;  // the upload buffer or the vertex cache's
   // Shared constants of the previous draw and where they were uploaded.
   uint32_t compartidas_previas_[kPalabrasCompartidas] = {};
   uint64_t compartidas_miradas_ = 0;    // C6 report, to decide how to make the block cheaper

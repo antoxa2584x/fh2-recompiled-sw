@@ -94,6 +94,39 @@ if(REXGLUE_PLATFORM_SWITCH)
         endforeach()
         target_link_options(fh2 PRIVATE -flto=2 -flto-partition=balanced)
     endif()
+    # Profile-guided optimization (PGO) in two steps, as nfsmw-nx does it (docs/switch.md):
+    #   generar: instrumented build; the game dumps the profile to sdmc:/switch/fh2/pgo every 2 minutes
+    #            (src/fh2_switch_pgo.cpp);
+    #   usar:    rebuilds with those .gcda files copied to FH2_SWITCH_PGO_DIR.
+    # Both in the same build folder: each .gcda is named after its object's path relative to it
+    # (-fprofile-prefix-path). -fno-profile-values: libgcov's value profiling reads the TLS through tpidr_el0, which is 0
+    # on Horizon (libnx uses -mtp=soft), and the instrumented build crashed at startup in nfsmw-nx.
+    set(FH2_SWITCH_PGO "" CACHE STRING "Profile-guided optimization on Switch: empty, generar or usar")
+    get_filename_component(FH2_SWITCH_PGO_DIR_PADRAO "${CMAKE_CURRENT_SOURCE_DIR}/../pgo/switch" ABSOLUTE)
+    set(FH2_SWITCH_PGO_DIR "${FH2_SWITCH_PGO_DIR_PADRAO}" CACHE PATH "Folder of the Switch PGO profile (.gcda)")
+    target_sources(fh2 PRIVATE src/fh2_switch_pgo.cpp)
+    if(FH2_SWITCH_PGO STREQUAL "generar")
+        set(FH2_PGO_OPCOES -fprofile-generate=${FH2_SWITCH_PGO_DIR} "-fprofile-prefix-path=${CMAKE_BINARY_DIR}"
+                           -fprofile-update=single -fno-profile-values)
+        target_link_options(fh2 PRIVATE -fprofile-generate)
+        target_compile_definitions(fh2 PRIVATE FH2_PGO_GERAR=1 "FH2_PGO_DIR=\"${FH2_SWITCH_PGO_DIR}\"")
+    elseif(FH2_SWITCH_PGO STREQUAL "usar")
+        # -fprofile-correction: the counters are not atomic (-fprofile-update=single), and functions run by several
+        # threads at once end up with inconsistent counts that GCC would otherwise reject as a corrupt profile.
+        set(FH2_PGO_OPCOES -fprofile-use=${FH2_SWITCH_PGO_DIR} "-fprofile-prefix-path=${CMAKE_BINARY_DIR}"
+                           -fprofile-partial-training -fno-profile-values -fprofile-correction -Wno-missing-profile
+                           -Wno-error=coverage-mismatch)
+        target_link_options(fh2 PRIVATE -fprofile-use -fprofile-partial-training -fprofile-correction)
+    elseif(FH2_SWITCH_PGO)
+        message(FATAL_ERROR "FH2_SWITCH_PGO must be empty, generar or usar (it is '${FH2_SWITCH_PGO}')")
+    endif()
+    if(FH2_SWITCH_PGO)
+        foreach(alvo fh2_recomp fh2 ${REXGLUE_DLL_MODULE_TARGETS})
+            if(TARGET ${alvo})
+                target_compile_options(${alvo} PRIVATE ${FH2_PGO_OPCOES})
+            endif()
+        endforeach()
+    endif()
     # Homebrew menu icon: a 256x256 JPEG. Not distributed (it would be the game's art); without
     # tools/switch/icon.jpg the NRO gets libnx's default icon.
     set(FH2_SWITCH_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../tools/switch/icon.jpg")

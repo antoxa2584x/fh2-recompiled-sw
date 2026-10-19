@@ -39,3 +39,6 @@ __pycache__/
 # --- Third-party sources -------------------------------------------------------
 # Fetched by tools/fetch_thirdparty.py; only the files this port changed are committed (git add -f).
 sdk/thirdparty/
+
+# Switch PGO profiles (made from the game code)
+/pgo/
